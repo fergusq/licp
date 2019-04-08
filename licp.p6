@@ -219,7 +219,7 @@ class ToAST {
     method list ($/)             { make List.new(list => $<expr>.map(*.made)) }
 }
 
-sub MAIN() {
-    LICP.parse("fibonacci.licp".IO.slurp, actions => ToAST);
+sub MAIN(Str $input-file) {
+    LICP.parse($input-file.IO.slurp, actions => ToAST);
     say $/.ast.to-c(Scope.new(variables => {})).to-string;
 }
