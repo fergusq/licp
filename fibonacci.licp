@@ -1,0 +1,10 @@
+(call
+	(λ fa (call f f a))
+	(λ fa
+		(if (< a 1)
+			1
+			(+ (call f (- a 1)) (call f (- a 2)))
+		)
+	)
+	5
+)
