@@ -1,4 +1,4 @@
-(call
+(print (call
 	(λ fa (call f f a))
 	(λ fa
 		(if (< a 1)
@@ -7,4 +7,10 @@
 		)
 	)
 	5
-)
+))
+(let ((fib (λ a (if (< a 1) 1 (+ (call fib (- a 1))
+                                 (call fib (- a 2))))))
+      (repeat (λ fn (if (≤ n 1) (print (call f 1))
+                                (, (call repeat f (- n 1))
+                                   (print (call f n)))))))
+     (call repeat fib 10))

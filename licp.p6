@@ -6,6 +6,7 @@ sub counter returns Int { $counter++ }
 class Output {
     has Str @.header-buffer is rw;
     has Str @.command-buffer is rw;
+    has Str @.command-after-let-buffer is rw;
     has Str $.expr-buffer is rw = "";
 
     method header(Str $s) {
@@ -16,13 +17,19 @@ class Output {
         $.command-buffer.push("  " x $indent ~ $s ~ "\n");
     }
 
+    method command-after-let(Str $s, Int $indent = 1) {
+        $.command-after-let-buffer.push("  " x $indent ~ $s ~ "\n");
+    }
+
     method return(Str $s) {
         $.expr-buffer = $s;
     }
 
-    method merge(Output $other, Int $indent = 0) returns Str {
-        $.header-buffer.append($other.header-buffer.map("  " x $indent ~ *));
-        $.command-buffer.append($other.command-buffer.map("  " x $indent ~ *));
+    method merge(Output $other, Int $indent = 0, Bool :$let = False) returns Str {
+        @.header-buffer.append($other.header-buffer.map("  " x $indent ~ *));
+        @.command-buffer.append($other.command-buffer.map("  " x $indent ~ *));
+        ($let ?? $.command-after-let-buffer !! $.command-buffer)
+                .append($other.command-after-let-buffer.map("  " x $indent ~ *));
         return $other.expr-buffer
     }
 
@@ -32,6 +39,11 @@ class Output {
         "{$other.command-buffer.map($i ~ *).join}  $i$ret {$other.expr-buffer};"
     }
 
+    method after-let {
+        @.command-buffer.append(@.command-after-let-buffer);
+        @.command-after-let-buffer = ();
+    }
+
     method to-string {
         "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include \"licp.h\"\n\n{$.header-buffer.join}\nint main() \{LICP *vars;\n{$.command-buffer.join}\n  // $.expr-buffer.i\n\}"
     }
@@ -39,7 +51,7 @@ class Output {
 
 sub output(&f) returns Output {
     my $output = Output.new();
-    &f($output);
+    f($output);
     $output
 }
 
@@ -139,6 +151,12 @@ class List is Node {
             when ">" {
                 self!cmp-operator($scope, ">")
             }
+            when "≤" {
+                self!cmp-operator($scope, "<=")
+            }
+            when "≥" {
+                self!cmp-operator($scope, ">=")
+            }
             when "if" {
                 self!check-args(3);
                 my Node $cond = @.list[1];
@@ -170,7 +188,7 @@ class List is Node {
                     .command: "LICP $tname;";
                     .command: "$tname.f.f = &$fname;";
                     .command: "$tname.f.vars = alloc(sizeof(LICP) * $n);" if $n;
-                    .command: "memcpy($tname.f.vars, vars, sizeof(LICP) * $old-n);" if $old-n;
+                    .command-after-let: "memcpy($tname.f.vars, vars, sizeof(LICP) * $old-n);" if $old-n;
                     .command: "$tname.f.n = $n;";
                     .return: $tname
                 }
@@ -195,14 +213,14 @@ class List is Node {
                 self!check-args(1);
                 my Node $arg = @.list[1];
                 output -> $o {
-                    $o.command: "printf(\"%d\", {$o.merge($arg.to-c($scope))});";
-                    $o.return: "0"
+                    $o.command: "printf(\"%d\\n\", {$o.merge($arg.to-c($scope))}.i);";
+                    $o.return: "(LICP) 0"
                 }
             }
             when "," {
                 self!check-args(1, True);
                 output -> $o {
-                    $o.merge: .to-c($scope) for @.list[1..*-1];
+                    $o.merge: .to-c($scope) for @.list[1..*-2];
                     $o.return: $o.merge(@.list[*-1].to-c($scope))
                 }
             }
@@ -224,7 +242,8 @@ class List is Node {
                     $o.command: "LICP *$tmp-vars = vars;";
                     $o.command: "vars = alloc(sizeof(LICP) * $n);" if $n;
                     $o.command: "memcpy(vars, $tmp-vars, sizeof(LICP) * $old-n);" if $old-n;
-                    $o.command: "vars[{$new-scope.variables{.key}}] = {$o.merge(.value.to-c($new-scope))};" for @bindings;
+                    $o.command: "vars[{$new-scope.variables{.key}}] = {$o.merge(.value.to-c($new-scope), :let)};" for @bindings;
+                    $o.after-let;
                     $o.command: "\{";
                     my $val = $o.merge($expr.to-c($new-scope), 1);
                     $o.command: "\}";
