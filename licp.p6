@@ -4,35 +4,36 @@ my $counter = 0;
 sub counter returns Int { $counter++ }
 
 class Output {
-    has Str $.header-buffer is rw = "";
-    has Str $.command-buffer is rw = "";
+    has Str @.header-buffer is rw;
+    has Str @.command-buffer is rw;
     has Str $.expr-buffer is rw = "";
 
     method header(Str $s) {
-        $.header-buffer ~= $s ~ "\n";
+        $.header-buffer.push($s ~ "\n");
     }
 
-    method command(Str $s) {
-        $.command-buffer ~= "  $s\n";
+    method command(Str $s, Int $indent = 1) {
+        $.command-buffer.push("  " x $indent ~ $s ~ "\n");
     }
 
     method return(Str $s) {
         $.expr-buffer = $s;
     }
 
-    method merge(Output $other) returns Str {
-        $.header-buffer ~= $other.header-buffer;
-        $.command-buffer ~= $other.command-buffer;
+    method merge(Output $other, Int $indent = 0) returns Str {
+        $.header-buffer.append($other.header-buffer.map("  " x $indent ~ *));
+        $.command-buffer.append($other.command-buffer.map("  " x $indent ~ *));
         return $other.expr-buffer
     }
 
-    method merge-header(Output $other, Str $ret) returns Str {
-        $.header-buffer ~= $other.header-buffer;
-        "{$other.command-buffer}  $ret {$other.expr-buffer};"
+    method merge-header(Output $other, Str $ret, Int $indent = 0) returns Str {
+        $.header-buffer.append($other.header-buffer);
+        my $i = "  " x $indent;
+        "{$other.command-buffer.map($i ~ *).join}  $i$ret {$other.expr-buffer};"
     }
 
     method to-string {
-        "#include <stdio.h>\n#include <stdlib.h>\n#include \"licp.h\"\n\n$.header-buffer\nint main() \{\n$.command-buffer\n  printf(\"%d\\n\", $.expr-buffer.i);\n\}"
+        "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include \"licp.h\"\n\n{$.header-buffer.join}\nint main() \{LICP *vars;\n{$.command-buffer.join}\n  // $.expr-buffer.i\n\}"
     }
 }
 
@@ -127,15 +128,19 @@ class List is Node {
                 self!binary-operator($scope, "/")
             }
             when "=" {
-                self!binary-operator($scope, "==")
+                self!cmp-operator($scope, "==")
+            }
+            when "≠" {
+                self!cmp-operator($scope, "!=")
             }
             when "<" {
-                self!binary-operator($scope, "<")
+                self!cmp-operator($scope, "<")
             }
             when ">" {
-                self!binary-operator($scope, ">")
+                self!cmp-operator($scope, ">")
             }
             when "if" {
+                self!check-args(3);
                 my Node $cond = @.list[1];
                 my Node $then = @.list[2];
                 my Node $else = @.list[3];
@@ -143,14 +148,15 @@ class List is Node {
                 output -> $o {
                     $o.command: "LICP $tname;";
                     $o.command: "if ($o.merge($cond.to-c($scope)).i) \{";
-                    $o.command: $o.merge-header($then.to-c($scope), "$tname =");
+                    $o.command: $o.merge-header($then.to-c($scope), "$tname =", 1), 0;
                     $o.command: "\} else \{";
-                    $o.command: $o.merge-header($else.to-c($scope), "$tname =");
+                    $o.command: $o.merge-header($else.to-c($scope), "$tname =", 1), 0;
                     $o.command: "\}";
                     $o.return: $tname
                 }
             }
             when "λ" {
+                self!check-args(2);
                 my Str @params = @.list[1].to-str-list;
                 my Node $body = @.list[2];
                 my Scope $new-scope = $scope.clone;
@@ -170,6 +176,7 @@ class List is Node {
                 }
             }
             when "call" {
+                self!check-args(2, True);
                 my Node $func = @.list[1];
                 my Node @args = @.list[2..*];
                 my Str @tmp-vars;
@@ -184,6 +191,47 @@ class List is Node {
                     $o.return: $tname;
                 }
             }
+            when "print" {
+                self!check-args(1);
+                my Node $arg = @.list[1];
+                output -> $o {
+                    $o.command: "printf(\"%d\", {$o.merge($arg.to-c($scope))});";
+                    $o.return: "0"
+                }
+            }
+            when "," {
+                self!check-args(1, True);
+                output -> $o {
+                    $o.merge: .to-c($scope) for @.list[1..*-1];
+                    $o.return: $o.merge(@.list[*-1].to-c($scope))
+                }
+            }
+            when "let" {
+                # FIXME
+                self!check-args(2);
+                die "illegal let bindings: expected list" unless @.list[1] ~~ List;
+                my Pair @bindings = @.list[1].list.map: -> $binding {
+                    die "illegal let binding: expected 2-list" unless $binding ~~ List and $binding.list.elems == 2;
+                    $binding.list[0].to-symbol => $binding.list[1]
+                };
+                my $expr = @.list[2];
+                my Scope $new-scope = $scope.clone;
+                $new-scope.add-variable($_) for @bindings.map(*.key);
+                my $n = $new-scope.variables.elems;
+                my $old-n = $scope.variables.elems;
+                my Str $tmp-vars = "tmp_vars{counter}";
+                output -> $o {
+                    $o.command: "LICP *$tmp-vars = vars;";
+                    $o.command: "vars = alloc(sizeof(LICP) * $n);" if $n;
+                    $o.command: "memcpy(vars, $tmp-vars, sizeof(LICP) * $old-n);" if $old-n;
+                    $o.command: "vars[{$new-scope.variables{.key}}] = {$o.merge(.value.to-c($new-scope))};" for @bindings;
+                    $o.command: "\{";
+                    my $val = $o.merge($expr.to-c($new-scope), 1);
+                    $o.command: "\}";
+                    $o.command: "vars = $tmp-vars;";
+                    $o.return: $val
+                }
+            }
             default {
                 die "unknown command $name"
             }
@@ -191,6 +239,7 @@ class List is Node {
     }
 
     method !binary-operator(Scope $scope, Str $op) returns Output {
+        self!check-args(1, True);
         my $tname = "t{counter}";
         output -> $o {
             $o.command: "LICP $tname;";
@@ -198,10 +247,41 @@ class List is Node {
             $o.return: $tname
         }
     }
+
+    method !cmp-operator(Scope $scope, Str $op) returns Output {
+        self!check-args(2, True);
+        my $tname = "t{counter}";
+        output -> $o {
+            my $operation = @.list[1..*]
+                    .map(-> $e {$o.merge($e.to-c($scope)) ~ ".i"})
+                    .rotor(2 => -1)
+                    .map(*.join($op))
+                    .join(" && ");
+            $o.command: "LICP $tname;";
+            $o.command: "$tname.i = $operation;";
+            $o.return: $tname
+        }
+    }
+
+    method !check-args(Int $required-count, Bool $or-more = False) {
+        my Str $name = @.list[0].to-symbol;
+        my Int $arg-count = @.list.elems - 1;
+        if $or-more {
+            die "$name/$required-count+ requires $required-count or more, not $arg-count args" if $arg-count < $required-count;
+        } else {
+            die "$name/$required-count requires $required-count, not $arg-count args" if $arg-count ≠ $required-count;
+        }
+    }
+}
+
+class Macro {
+    has $.name;
+    has @.params;
+    has $.body;
 }
 
 grammar LICP {
-    token TOP                    { <ws> <expr> <ws> }
+    token TOP                    { [<ws> <expr>]* <ws> }
     proto token expr             { * }
     multi token expr:sym<symbol> { <symbol> }
     multi token expr:sym<list>   { <list> }
@@ -212,7 +292,7 @@ grammar LICP {
 }
 
 class ToAST {
-    method TOP ($/)              { make $<expr>.made }
+    method TOP ($/)              { make $<expr>.map(*.made) }
     method expr:sym<symbol> ($/) { make Symbol.new(symbol => $<symbol>.Str) }
     method expr:sym<int> ($/)    { make IntSym.new(int => $<int>.Int) }
     method expr:sym<list> ($/)   { make $<list>.made }
@@ -221,5 +301,10 @@ class ToAST {
 
 sub MAIN(Str $input-file) {
     LICP.parse($input-file.IO.slurp, actions => ToAST);
-    say $/.ast.to-c(Scope.new(variables => {})).to-string;
+    my $o = output -> $o {
+        for $/.ast -> $tree {
+            $o.merge($tree.to-c(Scope.new(variables => {})));
+        }
+    };
+    say $o.to-string;
 }
