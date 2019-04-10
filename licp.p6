@@ -209,7 +209,7 @@ class List is Node {
                     $o.return: $tname;
                 }
             }
-            when "pair" {
+            when "list" {
                 self!check-args(0, True);
                 my Node @vals = @.list[1..*];
                 my $tname = "t{counter}";
