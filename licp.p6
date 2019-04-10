@@ -225,7 +225,6 @@ class List is Node {
                 }
             }
             when "let" {
-                # FIXME
                 self!check-args(2);
                 die "illegal let bindings: expected list" unless @.list[1] ~~ List;
                 my Pair @bindings = @.list[1].list.map: -> $binding {
