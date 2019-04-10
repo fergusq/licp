@@ -121,7 +121,7 @@ class List is Node {
     }
 
     method to-str-list returns Array[Str] {
-        @.list.map(*.to-symbol)
+        @.list».to-symbol
     }
 
     method to-c(Scope $scope) returns Output {
@@ -234,7 +234,7 @@ class List is Node {
                 };
                 my $expr = @.list[2];
                 my Scope $new-scope = $scope.clone;
-                $new-scope.add-variable($_) for @bindings.map(*.key);
+                $new-scope.add-variable($_) for @bindings».key;
                 my $n = $new-scope.variables.elems;
                 my $old-n = $scope.variables.elems;
                 my Str $tmp-vars = "tmp_vars{counter}";
