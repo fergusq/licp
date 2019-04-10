@@ -202,11 +202,37 @@ class List is Node {
                 my $tname = "t{counter}";
                 output -> $o {
                     my $fcode = $o.merge($func.to-c($scope));
-                    $o.command: "LICP {$_.value} = {$fcode}.f.vars[{$fcode}.f.n-{@args.elems - $_.key}];" for @tmp-vars.pairs;
-                    $o.command: "{$fcode}.f.vars[{$fcode}.f.n-{@args.elems - $_[0]}] = $o.merge($_[1].to-c($scope));" for zip ^@tmp-vars, @args;
+                    $o.command: "LICP {.value} = {$fcode}.f.vars[{$fcode}.f.n-{@args.elems - .key}];" for @tmp-vars.pairs;
+                    $o.command: "{$fcode}.f.vars[{$fcode}.f.n-{@args.elems - .key}] = $o.merge(.value.to-c($scope));" for @args.pairs;
                     $o.command: "LICP $tname = {$fcode}.f.f({$fcode}.f.vars);";
-                    $o.command: "{$fcode}.f.vars[{$fcode}.f.n-{@args.elems - $_.key}] = {$_.value};" for @tmp-vars.pairs;
+                    $o.command: "{$fcode}.f.vars[{$fcode}.f.n-{@args.elems - .key}] = {.value};" for @tmp-vars.pairs;
                     $o.return: $tname;
+                }
+            }
+            when "pair" {
+                self!check-args(0, True);
+                my Node @vals = @.list[1..*];
+                my $tname = "t{counter}";
+                output -> $o {
+                    $o.command: "LICP $tname;";
+                    $o.command: "$tname.l.n = {@vals.elems};";
+                    $o.command: "$tname.l.vals = alloc(sizeof(LICP) * {@vals.elems});";
+                    $o.command: "$tname.l.vals[{.key}] = $o.merge(.value.to-c($scope));" for @vals.pairs;
+                    $o.return: $tname;
+                }
+            }
+            when "get" {
+                self!check-args(2);
+                my Node ($list, $index) = @.list[1..2];
+                output {
+                    .return: "{.merge($list.to-c($scope))}.l.vals[{.merge($index.to-c($scope))}.i]";
+                }
+            }
+            when "len" {
+                self!check-args(1);
+                my Node $list = @.list[1];
+                output {
+                    .return: "{.merge($list.to-c($scope))}.l.n";
                 }
             }
             when "print" {
@@ -304,7 +330,7 @@ grammar LICP {
     multi token expr:sym<symbol> { <symbol> }
     multi token expr:sym<list>   { <list> }
     multi token expr:sym<int>    { <int> }
-    token symbol                 { <-[()\s0..9]>+ }
+    token symbol                 { <-[()\s\d]> <-[()\s]>* }
     token int                    { \d+ }
     token list                   { '(' <ws> <expr> [<ws> <expr>]* <ws> ')' }
 }
